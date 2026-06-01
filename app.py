@@ -18,9 +18,9 @@ load_dotenv()
 # ---------- Настройки ----------
 TOKEN = os.environ.get("TOKEN", "8730742431:AAE8qStJGKx1fRkD8AEUd7k98AESixEECCQ")
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "@ai_diges")
-CHECK_INTERVAL = 900  # 15 минут
+CHECK_INTERVAL = 60  # 1 минута для теста
 
-# ---------- Русскоязычные источники RSS ----------
+# ---------- Источники RSS ----------
 RSS_SOURCES = [
     {"name": "Habr AI", "url": "https://habr.com/ru/rss/hub/ai/"},
     {"name": "3DNews AI", "url": "https://3dnews.ru/news/search/искусственный+интеллект/rss/"},
@@ -137,14 +137,9 @@ async def check_and_post(context):
                 print(f"❌ Ошибка публикации: {e}")
     print(f"📊 Итого новых новостей: {new_count}")
 
-# ---------- Команды Telegram ----------
+# ---------- Команды ----------
 async def start(update: Update, context):
-    await update.message.reply_text(
-        "🤖 *Новостной агрегатор ИИ*\n\n"
-        "/status — статус\n"
-        "/sources — источники\n"
-        "/help — помощь"
-    )
+    await update.message.reply_text("🤖 Новостной агрегатор ИИ\n/status\n/sources\n/help")
 
 async def status_command(update: Update, context):
     conn = sqlite3.connect('news.db')
@@ -152,21 +147,13 @@ async def status_command(update: Update, context):
     cursor.execute("SELECT COUNT(*) FROM published_news")
     count = cursor.fetchone()[0]
     conn.close()
-    await update.message.reply_text(
-        f"📊 *Статус*\n\n"
-        f"📰 Новостей: {count}\n"
-        f"🔗 Источников: {len(RSS_SOURCES)}\n"
-        f"⏱ Интервал: {CHECK_INTERVAL // 60} мин"
-    )
+    await update.message.reply_text(f"📊 Новостей: {count}\n🔗 Источников: {len(RSS_SOURCES)}\n⏱ Интервал: {CHECK_INTERVAL // 60} мин")
 
 async def sources_command(update: Update, context):
-    text = "📰 *Источники*\n\n"
+    text = "📰 Источники:\n"
     for i, s in enumerate(RSS_SOURCES, 1):
         text += f"{i}. {s['name']}\n"
     await update.message.reply_text(text)
-
-async def help_command(update: Update, context):
-    await update.message.reply_text("/start\n/status\n/sources")
 
 # ---------- Запуск ----------
 async def main():
@@ -180,7 +167,6 @@ async def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("sources", sources_command))
-    application.add_handler(CommandHandler("help", help_command))
     
     scheduler = AsyncIOScheduler()
     scheduler.add_job(check_and_post, 'interval', seconds=CHECK_INTERVAL, args=[application])
