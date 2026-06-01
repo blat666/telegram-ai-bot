@@ -22,7 +22,7 @@ NEWS_API_KEY = os.environ.get("NEWS_API_KEY", "3add7899f6c845a992102b61cf46c437"
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "@ваш_канал")  # Сюда ID вашего канала
 
 # Интервал проверки в секундах (15 минут = 900 секунд)
-CHECK_INTERVAL = 900
+CHECK_INTERVAL = 60
 
 # ---------- Источники RSS (можно добавлять любые) ----------
 RSS_SOURCES = [
