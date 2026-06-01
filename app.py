@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ---------- Настройки ----------
-TOKEN = os.environ.get("TOKEN", "8730742431:AAE8qStJGKx1fRkD8AEUd7k98AESixEECCQ")
+TOKEN = os.environ.get("TOKEN", "8730742431:AAE77Bk8ji-OUCxFiiCqezFZGGdBak33bfY")
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "@ai_diges")
 CHECK_INTERVAL = 60  # 1 минута для теста
 
