@@ -19,17 +19,19 @@ load_dotenv()
 # ---------- Настройки (читаем из переменных окружения) ----------
 TOKEN = os.environ.get("TOKEN", "8730742431:AAE8qStJGKx1fRkD8AEUd7k98AESixEECCQ")
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY", "3add7899f6c845a992102b61cf46c437")
-CHANNEL_ID = os.environ.get("CHANNEL_ID", "@ваш_канал")  # Сюда ID вашего канала
+CHANNEL_ID = os.environ.get("CHANNEL_ID", "@ai_diges")  # Ваш канал
 
 # Интервал проверки в секундах (15 минут = 900 секунд)
 CHECK_INTERVAL = 900
 
-# ---------- Источники RSS (можно добавлять любые) ----------
+# ---------- Русскоязычные источники RSS ----------
 RSS_SOURCES = [
     {"name": "Habr AI", "url": "https://habr.com/ru/rss/hub/ai/"},
-    {"name": "TechCrunch AI", "url": "https://techcrunch.com/tag/artificial-intelligence/feed/"},
-    {"name": "VentureBeat AI", "url": "https://venturebeat.com/category/ai/feed/"},
-    {"name": "MIT AI News", "url": "http://news.mit.edu/topic/artificial-intelligence2/feed"},
+    {"name": "3DNews AI", "url": "https://3dnews.ru/news/search/искусственный+интеллект/rss/"},
+    {"name": "Naked Science AI", "url": "https://naked-science.ru/tags/iskusstvennyj-intellekt/feed"},
+    {"name": "VC.ru AI", "url": "https://vc.ru/tag/ai/rss"},
+    {"name": "Tproger AI", "url": "https://tproger.ru/tag/ai/feed"},
+    {"name": "IXBT AI", "url": "https://www.ixbt.com/export/news_ai.xml"},
 ]
 
 # ---------- Flask для Keep-Alive (чтобы Render не убивал бота) ----------
@@ -174,7 +176,8 @@ async def start(update: Update, context):
         "🤖 *Новостной агрегатор ИИ*\n\n"
         "Бот автоматически собирает новости из RSS-лент и публикует их в канал.\n\n"
         "📋 /status — статус агрегатора\n"
-        "📰 /sources — список источников"
+        "📰 /sources — список источников\n"
+        "🆘 /help — помощь"
     )
 
 async def status_command(update: Update, context):
@@ -199,6 +202,15 @@ async def sources_command(update: Update, context):
     
     await update.message.reply_text(sources_text)
 
+async def help_command(update: Update, context):
+    await update.message.reply_text(
+        "🤖 *Доступные команды:*\n\n"
+        "/start — приветствие\n"
+        "/status — статус агрегатора\n"
+        "/sources — список источников\n\n"
+        "📡 Новости публикуются автоматически каждые 15 минут"
+    )
+
 # ---------- Запуск бота ----------
 async def main():
     print("=" * 50)
@@ -206,7 +218,7 @@ async def main():
     print("=" * 50)
     
     # Проверяем наличие CHANNEL_ID
-    if CHANNEL_ID == "@ваш_канал":
+    if CHANNEL_ID == "@ai_diges" or CHANNEL_ID == "@ваш_канал":
         print("⚠️ ВНИМАНИЕ: CHANNEL_ID не настроен!")
         print("Добавьте переменную CHANNEL_ID в .env файл или в Render Environment")
     else:
@@ -222,6 +234,7 @@ async def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("sources", sources_command))
+    application.add_handler(CommandHandler("help", help_command))
     
     # Настраиваем планировщик (проверка RSS каждые N секунд)
     scheduler = AsyncIOScheduler()
