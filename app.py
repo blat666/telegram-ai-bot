@@ -5,6 +5,8 @@ import os
 from threading import Thread
 from flask import Flask
 import requests
+import feedparser
+from bs4 import BeautifulSoup
 from telegram import Update
 from telegram.ext import Application, CommandHandler
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -17,6 +19,13 @@ TOKEN = os.environ.get("TOKEN", "8730742431:AAE77Bk8ji-OUCxFiiCqezFZGGdBak33bfY"
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "@ai_diges")
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY", "3add7899f6c845a992102b61cf46c437")
 CHECK_INTERVAL = 300  # 5 минут
+
+# ---------- Юмористические RSS-источники ----------
+HUMOR_SOURCES = [
+    {"name": "AI Weirdness", "url": "https://www.aiweirdness.com/feed", "emoji": "😂"},
+    {"name": "Reddit AI Memes", "url": "https://www.reddit.com/r/ai_memes/.rss", "emoji": "🤣"},
+    {"name": "ProgrammerHumor AI", "url": "https://www.reddit.com/r/ProgrammerHumor/search.rss?q=ai&restrict_sr=on&sort=hot", "emoji": "😄"},
+]
 
 # ---------- Flask ----------
 app_flask = Flask(__name__)
@@ -38,8 +47,8 @@ def is_published(news_id):
 def save_published(news_id):
     published_ids.add(news_id)
 
-# ---------- Получение новостей через NewsAPI ----------
-def fetch_news():
+# ---------- Получение серьёзных новостей через NewsAPI ----------
+def fetch_serious_news():
     try:
         url = "https://newsapi.org/v2/everything"
         params = {
@@ -47,7 +56,7 @@ def fetch_news():
             "language": "ru",
             "sortBy": "publishedAt",
             "apiKey": NEWS_API_KEY,
-            "pageSize": 5
+            "pageSize": 3  # меньше, чтобы оставить место для юмора
         }
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
@@ -76,26 +85,85 @@ def fetch_news():
                 "link": article["url"],
                 "published_at": published_at,
                 "source": article.get("source", {}).get("name", "Unknown"),
-                "description": article.get("description", "")[:200]
+                "description": article.get("description", "")[:200],
+                "type": "serious"
             })
         
-        print(f"📰 Собрано новостей: {len(news_list)}")
+        print(f"📰 Серьёзных новостей: {len(news_list)}")
         return news_list
     except Exception as e:
         print(f"❌ Ошибка NewsAPI: {e}")
         return []
 
+# ---------- Получение юмористических постов из RSS ----------
+def fetch_humor_news():
+    all_posts = []
+    for source in HUMOR_SOURCES:
+        try:
+            print(f"😂 Парсим {source['name']}...")
+            feed = feedparser.parse(source["url"])
+            for entry in feed.entries[:2]:  # 2 поста из каждого источника
+                news_id = hashlib.md5(f"{entry.link}{entry.title}".encode()).hexdigest()
+                published_at = datetime.datetime.now()
+                if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                    published_at = datetime.datetime(*entry.published_parsed[:6])
+                
+                # Извлекаем описание/содержание
+                description = ""
+                if hasattr(entry, 'summary'):
+                    soup = BeautifulSoup(entry.summary, 'html.parser')
+                    description = soup.get_text()[:200]
+                elif hasattr(entry, 'description'):
+                    soup = BeautifulSoup(entry.description, 'html.parser')
+                    description = soup.get_text()[:200]
+                
+                all_posts.append({
+                    "id": news_id,
+                    "title": entry.title,
+                    "link": entry.link,
+                    "published_at": published_at,
+                    "source": f"{source['emoji']} {source['name']}",
+                    "description": description,
+                    "type": "humor"
+                })
+        except Exception as e:
+            print(f"❌ Ошибка парсинга {source['name']}: {e}")
+    
+    print(f"😂 Юмористических постов: {len(all_posts)}")
+    return all_posts
+
+# ---------- Объединённый сбор новостей ----------
+def fetch_news():
+    serious_news = fetch_serious_news()
+    humor_posts = fetch_humor_news()
+    
+    all_news = serious_news + humor_posts
+    
+    # Перемешиваем, чтобы серьёзное и смешное чередовалось
+    import random
+    random.shuffle(all_news)
+    
+    print(f"📊 Всего собрано: {len(all_news)}")
+    return all_news
+
 def format_news(news):
-    message = f"🤖 *{news['source']}*\n"
-    message += f"📰 [{news['title']}]({news['link']})\n"
-    if news['description']:
-        message += f"\n📝 {news['description']}\n"
+    if news['type'] == 'humor':
+        message = f"🎭 *{news['source']}*\n"
+        message += f"😂 [{news['title']}]({news['link']})\n"
+        if news['description']:
+            message += f"\n💬 {news['description']}\n"
+    else:
+        message = f"🤖 *{news['source']}*\n"
+        message += f"📰 [{news['title']}]({news['link']})\n"
+        if news['description']:
+            message += f"\n📝 {news['description']}\n"
+    
     message += f"\n🕐 {news['published_at'].strftime('%H:%M')}\n"
     message += "━━━━━━━━━━━━━━━━━━━"
     return message
 
 async def check_and_post(context):
-    print(f"[{datetime.datetime.now()}] 🔍 Проверка новых новостей...")
+    print(f"[{datetime.datetime.now()}] 🔍 Проверка новых постов...")
     news_list = fetch_news()
     new_count = 0
     for news in news_list:
@@ -110,7 +178,8 @@ async def check_and_post(context):
                 )
                 save_published(news["id"])
                 new_count += 1
-                print(f"✅ Опубликовано: {news['title'][:50]}...")
+                prefix = "😂" if news['type'] == 'humor' else "📰"
+                print(f"{prefix} Опубликовано: {news['title'][:50]}...")
                 await asyncio.sleep(2)
             except Exception as e:
                 print(f"❌ Ошибка публикации: {e}")
@@ -118,21 +187,41 @@ async def check_and_post(context):
 
 # ---------- Команды ----------
 async def start(update: Update, context):
-    await update.message.reply_text("🤖 Новостной агрегатор ИИ (NewsAPI)\n/status — статистика")
+    await update.message.reply_text(
+        "🤖 *Новостной агрегатор ИИ с юмором*\n\n"
+        "📰 Серьёзные новости — NewsAPI\n"
+        "😂 Мемы и шутки — RSS-ленты\n\n"
+        "/status — статистика\n"
+        "/sources — список источников"
+    )
 
 async def status_command(update: Update, context):
-    await update.message.reply_text(f"📊 Новостей в памяти: {len(published_ids)}\n⏱ Интервал: {CHECK_INTERVAL // 60} мин\n📡 Источник: NewsAPI")
+    await update.message.reply_text(
+        f"📊 *Статистика*\n\n"
+        f"📰 Новостей в памяти: {len(published_ids)}\n"
+        f"⏱ Интервал: {CHECK_INTERVAL // 60} мин\n"
+        f"📡 Серьёзные: NewsAPI\n"
+        f"😂 Юмор: {len(HUMOR_SOURCES)} источников"
+    )
+
+async def sources_command(update: Update, context):
+    text = "📰 *Серьёзные источники*\n• NewsAPI (поиск по ИИ)\n\n"
+    text += "😂 *Юмористические источники*\n"
+    for s in HUMOR_SOURCES:
+        text += f"• {s['emoji']} {s['name']}\n"
+    await update.message.reply_text(text)
 
 # ---------- Запуск ----------
 async def main():
     print("=" * 50)
-    print("🚀 ЗАПУСК НОВОСТНОГО АГРЕГАТОРА (NewsAPI)")
+    print("🚀 ЗАПУСК НОВОСТНОГО АГРЕГАТОРА (NewsAPI + Юмор)")
     print("=" * 50)
     print(f"✅ Канал: {CHANNEL_ID}")
     
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("sources", sources_command))
     
     scheduler = AsyncIOScheduler()
     scheduler.add_job(check_and_post, 'interval', seconds=CHECK_INTERVAL, args=[application])
