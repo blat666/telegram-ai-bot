@@ -16,7 +16,7 @@ load_dotenv()
 TOKEN = os.environ.get("TOKEN", "8730742431:AAE77Bk8ji-OUCxFiiCqezFZGGdBak33bfY")
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "@ai_diges")
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY", "3add7899f6c845a992102b61cf46c437")
-CHECK_INTERVAL = 900  # 15 минут
+CHECK_INTERVAL = 300  # 5 минут
 
 # ---------- Flask ----------
 app_flask = Flask(__name__)
