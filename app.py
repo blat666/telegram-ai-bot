@@ -20,11 +20,11 @@ CHANNEL_ID = os.environ.get("CHANNEL_ID", "@ai_diges")
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY", "3add7899f6c845a992102b61cf46c437")
 CHECK_INTERVAL = 300  # 5 минут
 
-# ---------- Юмористические RSS-источники ----------
+# ---------- Русскоязычные юмористические источники ----------
 HUMOR_SOURCES = [
-    {"name": "AI Weirdness", "url": "https://www.aiweirdness.com/feed", "emoji": "😂"},
-    {"name": "Reddit AI Memes", "url": "https://www.reddit.com/r/ai_memes/.rss", "emoji": "🤣"},
-    {"name": "ProgrammerHumor AI", "url": "https://www.reddit.com/r/ProgrammerHumor/search.rss?q=ai&restrict_sr=on&sort=hot", "emoji": "😄"},
+    {"name": "IT Юмор", "url": "https://tg.i-c-a.su/rss/@it_ru", "emoji": "😂"},
+    {"name": "N+1 (наука с улыбкой)", "url": "https://nplus1.ru/rss", "emoji": "🤣"},
+    {"name": "Habr Сарказм", "url": "https://habr.com/ru/rss/hub/sarcasm/", "emoji": "🎭"},
 ]
 
 # ---------- Flask ----------
@@ -56,7 +56,7 @@ def fetch_serious_news():
             "language": "ru",
             "sortBy": "publishedAt",
             "apiKey": NEWS_API_KEY,
-            "pageSize": 3  # меньше, чтобы оставить место для юмора
+            "pageSize": 3
         }
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
@@ -102,13 +102,12 @@ def fetch_humor_news():
         try:
             print(f"😂 Парсим {source['name']}...")
             feed = feedparser.parse(source["url"])
-            for entry in feed.entries[:2]:  # 2 поста из каждого источника
+            for entry in feed.entries[:3]:
                 news_id = hashlib.md5(f"{entry.link}{entry.title}".encode()).hexdigest()
                 published_at = datetime.datetime.now()
                 if hasattr(entry, 'published_parsed') and entry.published_parsed:
                     published_at = datetime.datetime(*entry.published_parsed[:6])
                 
-                # Извлекаем описание/содержание
                 description = ""
                 if hasattr(entry, 'summary'):
                     soup = BeautifulSoup(entry.summary, 'html.parser')
@@ -139,7 +138,6 @@ def fetch_news():
     
     all_news = serious_news + humor_posts
     
-    # Перемешиваем, чтобы серьёзное и смешное чередовалось
     import random
     random.shuffle(all_news)
     
@@ -188,9 +186,9 @@ async def check_and_post(context):
 # ---------- Команды ----------
 async def start(update: Update, context):
     await update.message.reply_text(
-        "🤖 *Новостной агрегатор ИИ с юмором*\n\n"
+        "🤖 *Новостной агрегатор ИИ с русским юмором*\n\n"
         "📰 Серьёзные новости — NewsAPI\n"
-        "😂 Мемы и шутки — RSS-ленты\n\n"
+        "😂 Мемы и шутки — русские IT-паблики\n\n"
         "/status — статистика\n"
         "/sources — список источников"
     )
@@ -201,12 +199,12 @@ async def status_command(update: Update, context):
         f"📰 Новостей в памяти: {len(published_ids)}\n"
         f"⏱ Интервал: {CHECK_INTERVAL // 60} мин\n"
         f"📡 Серьёзные: NewsAPI\n"
-        f"😂 Юмор: {len(HUMOR_SOURCES)} источников"
+        f"😂 Юмор: {len(HUMOR_SOURCES)} русских источников"
     )
 
 async def sources_command(update: Update, context):
     text = "📰 *Серьёзные источники*\n• NewsAPI (поиск по ИИ)\n\n"
-    text += "😂 *Юмористические источники*\n"
+    text += "😂 *Русскоязычные юмористические источники*\n"
     for s in HUMOR_SOURCES:
         text += f"• {s['emoji']} {s['name']}\n"
     await update.message.reply_text(text)
@@ -214,7 +212,7 @@ async def sources_command(update: Update, context):
 # ---------- Запуск ----------
 async def main():
     print("=" * 50)
-    print("🚀 ЗАПУСК НОВОСТНОГО АГРЕГАТОРА (NewsAPI + Юмор)")
+    print("🚀 ЗАПУСК НОВОСТНОГО АГРЕГАТОРА (NewsAPI + Русский юмор)")
     print("=" * 50)
     print(f"✅ Канал: {CHANNEL_ID}")
     
