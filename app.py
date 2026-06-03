@@ -254,6 +254,10 @@ async def main():
     scheduler.start()
     print(f"✅ Планировщик: {CHECK_INTERVAL // 60} минут")
     
+    # 👇 НЕМЕДЛЕННЫЙ ВЫЗОВ ПАРСИНГА ПРИ СТАРТЕ
+    print("🔥 Запускаем немедленную проверку...")
+    asyncio.create_task(check_and_post(application))
+    
     flask_thread = Thread(target=run_flask)
     flask_thread.start()
     
