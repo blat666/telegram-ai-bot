@@ -82,12 +82,25 @@ async def rewrite_text(text):
 
 # ---------- Парсинг каналов через Telethon ----------
 async def fetch_from_channels():
+    print("🔍 Telethon: НАЧАЛО работы функции")
     if not API_ID or not API_HASH:
+        print("❌ Telethon: API_ID или API_HASH не заданы")
         return []
+    
+    print(f"🔍 Telethon: API_ID={API_ID}, API_HASH={API_HASH[:5]}...")
+    print(f"🔍 Telethon: Каналы для парсинга: {SOURCE_CHANNELS}")
     
     all_posts = []
     try:
         async with TelegramClient('session', API_ID, API_HASH, connection=ConnectionTcpAbridged) as client:
+            print("🔍 Telethon: Клиент создан, проверяем авторизацию...")
+            
+            if not await client.is_user_authorized():
+                print("❌ Telethon: Нет авторизации! Сессия невалидна.")
+                return []
+            
+            print("✅ Telethon: Авторизация успешна!")
+            
             for channel_name in SOURCE_CHANNELS:
                 try:
                     print(f"📡 Парсим канал {channel_name}...")
@@ -107,7 +120,9 @@ async def fetch_from_channels():
                 except Exception as e:
                     print(f"❌ Ошибка канала {channel_name}: {e}")
     except Exception as e:
-        print(f"❌ Ошибка Telethon: {e}")
+        print(f"❌ Telethon: КРИТИЧЕСКАЯ ОШИБКА: {e}")
+        import traceback
+        traceback.print_exc()
     
     print(f"📊 Из каналов собрано: {len(all_posts)}")
     return all_posts
@@ -221,6 +236,8 @@ async def sources_command(update: Update, context):
 
 # ---------- Запуск ----------
 async def main():
+    import telethon
+    print(f"📦 Telethon version: {telethon.__version__}")
     print("=" * 50)
     print("🚀 ЗАПУСК НОВОСТНОГО АГРЕГАТОРА")
     print("=" * 50)
