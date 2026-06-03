@@ -23,7 +23,7 @@ NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 CHECK_INTERVAL = 300  # 5 минут
 
-# ---------- RSS-источники (можно любые, хоть английские) ----------
+# ---------- RSS-источники ----------
 RSS_SOURCES = [
     {"name": "Habr AI", "url": "https://habr.com/ru/rss/hub/ai/", "lang": "ru"},
     {"name": "TechCrunch AI", "url": "https://techcrunch.com/tag/artificial-intelligence/feed/", "lang": "en"},
@@ -98,8 +98,6 @@ def fetch_rss_news():
             for entry in feed.entries[:3]:
                 news_id = hashlib.md5(f"{entry.link}{entry.title}".encode()).hexdigest()
                 
-                # Оригинальный заголовок и описание
-                title = entry.title
                 summary = ""
                 if hasattr(entry, 'summary'):
                     soup = BeautifulSoup(entry.summary, 'html.parser')
@@ -110,7 +108,7 @@ def fetch_rss_news():
                 
                 all_news.append({
                     "id": news_id,
-                    "original_title": title,
+                    "original_title": entry.title,
                     "original_summary": summary,
                     "link": entry.link,
                     "published_at": datetime.datetime.now(),
@@ -159,17 +157,16 @@ def fetch_newsapi():
         print(f"❌ Ошибка NewsAPI: {e}")
         return []
 
-# ---------- Форматирование с AI ----------
+# ---------- Форматирование с AI (перевод для всех) ----------
 async def format_news(news):
     # Переводим и переписываем заголовок
     processed_title = await translate_and_rewrite(news["original_title"], news["lang"])
     
-    # Переводим и переписываем описание (если есть)
+    # Переводим и переписываем описание
     processed_summary = ""
     if news["original_summary"] and len(news["original_summary"]) > 30:
         processed_summary = await translate_and_rewrite(news["original_summary"], news["lang"])
     
-    # Собираем сообщение
     message = f"🤖 *{news['source']}*\n"
     message += f"📌 {processed_title}\n"
     if processed_summary:
@@ -181,7 +178,6 @@ async def format_news(news):
 async def check_and_post(context):
     print(f"[{datetime.datetime.now()}] 🔍 Проверка новых новостей...")
     
-    # Собираем новости из всех источников
     rss_news = fetch_rss_news()
     newsapi_news = fetch_newsapi()
     all_news = rss_news + newsapi_news
@@ -201,7 +197,7 @@ async def check_and_post(context):
                 save_published(news["id"])
                 new_count += 1
                 print(f"✅ Опубликовано: {news['original_title'][:50]}...")
-                await asyncio.sleep(3)  # Пауза между постами
+                await asyncio.sleep(3)
             except Exception as e:
                 print(f"❌ Ошибка публикации: {e}")
     
@@ -254,7 +250,6 @@ async def main():
     scheduler.start()
     print(f"✅ Планировщик: {CHECK_INTERVAL // 60} минут")
     
-    # Немедленный запуск
     asyncio.create_task(check_and_post(application))
     
     flask_thread = Thread(target=run_flask)
