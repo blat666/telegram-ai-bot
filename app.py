@@ -5,48 +5,34 @@ import os
 import random
 from threading import Thread
 from flask import Flask
-import requests
+import feedparser
+from bs4 import BeautifulSoup
 from telegram import Update
 from telegram.ext import Application, CommandHandler
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
-from telethon import TelegramClient
-from telethon.network.connection.tcpabridged import ConnectionTcpAbridged
-from openai import OpenAI
 
 load_dotenv()
 
 # ---------- Настройки ----------
 TOKEN = os.environ.get("TOKEN")
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "@ai_diges")
-NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
-API_ID = int(os.environ.get("API_ID", 31563391))
-API_HASH = os.environ.get("API_HASH", '76bc8833471380628c81fbba9d6e8014')
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 CHECK_INTERVAL = 300  # 5 минут
 
-# ---------- Telegram-каналы для парсинга ----------
-SOURCE_CHANNELS = [
-    "@it_ru",
-    "@rbc_news",
-    "@meduzalive",
+# ---------- RSS-источники (русскоязычные, работают) ----------
+RSS_SOURCES = [
+    {"name": "Habr AI", "url": "https://habr.com/ru/rss/hub/ai/"},
+    {"name": "3DNews AI", "url": "https://3dnews.ru/news/search/искусственный+интеллект/rss/"},
+    {"name": "VC.ru AI", "url": "https://vc.ru/tag/ai/rss"},
+    {"name": "Tproger AI", "url": "https://tproger.ru/tag/ai/feed"},
 ]
-
-# ---------- Настройки AI ----------
-if OPENROUTER_API_KEY:
-    openai_client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=OPENROUTER_API_KEY,
-    )
-else:
-    openai_client = None
 
 # ---------- Flask ----------
 app_flask = Flask(__name__)
 
 @app_flask.route('/')
 def home():
-    return "News Aggregator Bot with AI Rewrite is running!"
+    return "News Aggregator Bot (RSS) is running!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 5000))
@@ -61,141 +47,55 @@ def is_published(news_id):
 def save_published(news_id):
     published_ids.add(news_id)
 
-# ---------- AI-рерайт ----------
-async def rewrite_text(text):
-    if not text or len(text) < 50 or not openai_client:
-        return text
-    try:
-        response = openai_client.chat.completions.create(
-            model="google/gemini-2.0-flash-exp:free",
-            messages=[
-                {"role": "system", "content": "Ты — редактор новостного канала. Перепиши этот текст короче и интереснее, сохранив смысл. Убери воду, сделай стиль живым. Не добавляй ссылки. Ответь только переписанным текстом."},
-                {"role": "user", "content": text}
-            ],
-            temperature=0.7,
-            max_tokens=500
-        )
-        return response.choices[0].message.content[:400]
-    except Exception as e:
-        print(f"❌ Ошибка AI: {e}")
-        return text
-
-# ---------- Парсинг каналов через Telethon ----------
-async def fetch_from_channels():
-    print("🔍 Telethon: НАЧАЛО работы функции")
-    if not API_ID or not API_HASH:
-        print("❌ Telethon: API_ID или API_HASH не заданы")
-        return []
+# ---------- Парсинг RSS ----------
+def fetch_rss_news():
+    all_news = []
+    for source in RSS_SOURCES:
+        try:
+            print(f"📡 Парсим {source['name']}...")
+            feed = feedparser.parse(source["url"])
+            for entry in feed.entries[:3]:
+                news_id = hashlib.md5(f"{entry.link}{entry.title}".encode()).hexdigest()
+                
+                # Чистим описание от HTML
+                summary = ""
+                if hasattr(entry, 'summary'):
+                    soup = BeautifulSoup(entry.summary, 'html.parser')
+                    summary = soup.get_text()[:200]
+                
+                all_news.append({
+                    "id": news_id,
+                    "title": entry.title,
+                    "link": entry.link,
+                    "published_at": datetime.datetime.now(),
+                    "source": source["name"],
+                    "summary": summary,
+                    "type": "rss"
+                })
+        except Exception as e:
+            print(f"❌ Ошибка {source['name']}: {e}")
     
-    print(f"🔍 Telethon: API_ID={API_ID}, API_HASH={API_HASH[:5]}...")
-    print(f"🔍 Telethon: Каналы для парсинга: {SOURCE_CHANNELS}")
-    
-    all_posts = []
-    try:
-        async with TelegramClient('session', API_ID, API_HASH, connection=ConnectionTcpAbridged) as client:
-            print("🔍 Telethon: Клиент создан, проверяем авторизацию...")
-            
-            if not await client.is_user_authorized():
-                print("❌ Telethon: Нет авторизации! Сессия невалидна.")
-                return []
-            
-            print("✅ Telethon: Авторизация успешна!")
-            
-            for channel_name in SOURCE_CHANNELS:
-                try:
-                    print(f"📡 Парсим канал {channel_name}...")
-                    channel = await client.get_entity(channel_name)
-                    async for message in client.iter_messages(channel, limit=2):
-                        if message.text and len(message.text) > 50:
-                            news_id = hashlib.md5(f"{channel_name}{message.id}{message.text[:50]}".encode()).hexdigest()
-                            all_posts.append({
-                                "id": news_id,
-                                "title": message.text[:100],
-                                "full_text": message.text,
-                                "link": f"https://t.me/{channel_name.replace('@', '')}/{message.id}",
-                                "published_at": message.date,
-                                "source": channel_name,
-                                "type": "channel"
-                            })
-                except Exception as e:
-                    print(f"❌ Ошибка канала {channel_name}: {e}")
-    except Exception as e:
-        print(f"❌ Telethon: КРИТИЧЕСКАЯ ОШИБКА: {e}")
-        import traceback
-        traceback.print_exc()
-    
-    print(f"📊 Из каналов собрано: {len(all_posts)}")
-    return all_posts
-
-# ---------- NewsAPI ----------
-def fetch_serious_news():
-    if not NEWS_API_KEY:
-        return []
-    try:
-        url = "https://newsapi.org/v2/everything"
-        params = {
-            "q": "искусственный интеллект OR нейросети OR AI",
-            "language": "ru",
-            "sortBy": "publishedAt",
-            "apiKey": NEWS_API_KEY,
-            "pageSize": 3
-        }
-        response = requests.get(url, params=params, timeout=10)
-        data = response.json()
-        if data.get("status") != "ok":
-            return []
-        news_list = []
-        for article in data.get("articles", []):
-            if not article.get("title"):
-                continue
-            news_id = hashlib.md5(f"{article['url']}{article['title']}".encode()).hexdigest()
-            news_list.append({
-                "id": news_id,
-                "title": article["title"],
-                "full_text": article.get("description", ""),
-                "link": article["url"],
-                "published_at": datetime.datetime.now(),
-                "source": article.get("source", {}).get("name", "Unknown"),
-                "type": "newsapi"
-            })
-        return news_list
-    except Exception as e:
-        print(f"❌ Ошибка NewsAPI: {e}")
-        return []
-
-# ---------- Объединённый сбор ----------
-async def fetch_all_news():
-    serious = fetch_serious_news()
-    channels = await fetch_from_channels()
-    all_news = serious + channels
     random.shuffle(all_news)
-    print(f"📊 Всего собрано: {len(all_news)}")
+    print(f"📰 Собрано новостей RSS: {len(all_news)}")
     return all_news
 
 # ---------- Форматирование ----------
-async def format_news(news):
-    if news['type'] == 'channel' and news.get('full_text'):
-        text = await rewrite_text(news['full_text'])
-        if not text or len(text) < 30:
-            text = news['title']
-    else:
-        text = news['title']
-    
-    emoji = "🔥" if news['type'] == 'channel' else "🤖"
-    message = f"{emoji} *{news['source']}*\n"
-    message += f"📰 {text}\n"
-    message += f"\n🔗 [Читать полностью]({news['link']})\n"
-    message += f"\n🕐 {news['published_at'].strftime('%H:%M') if hasattr(news['published_at'], 'strftime') else datetime.datetime.now().strftime('%H:%M')}\n"
+def format_news(news):
+    message = f"📰 *{news['source']}*\n"
+    message += f"📌 [{news['title']}]({news['link']})\n"
+    if news['summary']:
+        message += f"\n📝 {news['summary']}\n"
+    message += f"\n🕐 {news['published_at'].strftime('%H:%M')}\n"
     message += "━━━━━━━━━━━━━━━━━━━"
     return message
 
 async def check_and_post(context):
-    print(f"[{datetime.datetime.now()}] 🔍 Проверка новых постов...")
-    news_list = await fetch_all_news()
+    print(f"[{datetime.datetime.now()}] 🔍 Проверка новых новостей...")
+    news_list = fetch_rss_news()
     new_count = 0
     for news in news_list:
         if not is_published(news["id"]):
-            message = await format_news(news)
+            message = format_news(news)
             try:
                 await context.bot.send_message(
                     chat_id=CHANNEL_ID,
@@ -214,8 +114,8 @@ async def check_and_post(context):
 # ---------- Команды ----------
 async def start(update: Update, context):
     await update.message.reply_text(
-        "🤖 *Новостной агрегатор с AI-рерайтом*\n\n"
-        "📰 NewsAPI\n🔥 Telegram-каналы\n✍️ AI-рерайт\n\n"
+        "🤖 *Новостной агрегатор (RSS)*\n\n"
+        "📰 Новости из RSS-лент\n"
         "/status — статистика\n/sources — источники"
     )
 
@@ -224,25 +124,22 @@ async def status_command(update: Update, context):
         f"📊 *Статистика*\n\n"
         f"📰 Новостей в памяти: {len(published_ids)}\n"
         f"⏱ Интервал: {CHECK_INTERVAL // 60} мин\n"
-        f"🔥 Каналов: {len(SOURCE_CHANNELS)}\n"
-        f"✍️ AI-рерайт: {'включён' if openai_client else 'отключён'}"
+        f"📡 Источников RSS: {len(RSS_SOURCES)}"
     )
 
 async def sources_command(update: Update, context):
-    text = "📰 NewsAPI\n\n🔥 Telegram-каналы:\n"
-    for ch in SOURCE_CHANNELS:
-        text += f"• {ch}\n"
+    text = "📡 *RSS-источники:*\n"
+    for s in RSS_SOURCES:
+        text += f"• {s['name']}\n"
     await update.message.reply_text(text)
 
 # ---------- Запуск ----------
 async def main():
-    import telethon
-    print(f"📦 Telethon version: {telethon.__version__}")
     print("=" * 50)
-    print("🚀 ЗАПУСК НОВОСТНОГО АГРЕГАТОРА")
+    print("🚀 ЗАПУСК НОВОСТНОГО АГРЕГАТОРА (RSS)")
     print("=" * 50)
     print(f"✅ Канал: {CHANNEL_ID}")
-    print(f"🔥 Каналов для парсинга: {len(SOURCE_CHANNELS)}")
+    print(f"📡 RSS-источников: {len(RSS_SOURCES)}")
     
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
@@ -254,8 +151,7 @@ async def main():
     scheduler.start()
     print(f"✅ Планировщик: {CHECK_INTERVAL // 60} минут")
     
-    # 👇 НЕМЕДЛЕННЫЙ ВЫЗОВ ПАРСИНГА ПРИ СТАРТЕ
-    print("🔥 Запускаем немедленную проверку...")
+    # Немедленный запуск
     asyncio.create_task(check_and_post(application))
     
     flask_thread = Thread(target=run_flask)
