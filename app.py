@@ -12,7 +12,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
-from openai import OpenAI
+from googletrans import Translator
 
 load_dotenv()
 
@@ -20,7 +20,6 @@ load_dotenv()
 TOKEN = os.environ.get("TOKEN")
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "@ai_diges")
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 CHECK_INTERVAL = 300  # 5 минут
 
 # ---------- RSS-источники ----------
@@ -32,21 +31,27 @@ RSS_SOURCES = [
     {"name": "The Verge AI", "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml", "lang": "en"},
 ]
 
-# ---------- Настройки AI ----------
-if OPENROUTER_API_KEY:
-    openai_client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=OPENROUTER_API_KEY,
-    )
-else:
-    openai_client = None
+# ---------- Google Translate ----------
+translator = Translator()
+
+async def simple_translate(text, src='en', dest='ru'):
+    """Перевод через Google Translate (бесплатно)"""
+    if not text or len(text) < 30:
+        return text
+    try:
+        print(f"🌐 Переводим {len(text)} символов...")
+        result = await asyncio.to_thread(translator.translate, text[:3000], src=src, dest=dest)
+        return result.text
+    except Exception as e:
+        print(f"❌ Ошибка перевода: {e}")
+        return text
 
 # ---------- Flask ----------
 app_flask = Flask(__name__)
 
 @app_flask.route('/')
 def home():
-    return "News Aggregator Bot with AI Translation is running!"
+    return "News Aggregator Bot with Google Translate is running!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 5000))
@@ -61,33 +66,6 @@ def is_published(news_id):
 def save_published(news_id):
     published_ids.add(news_id)
 
-# ---------- AI: перевод + рерайт (полный текст, без обрыва) ----------
-async def translate_and_rewrite(text, source_lang="en"):
-    """Переводит с английского на русский, делает рерайт, но сохраняет смысл"""
-    if not text or len(text) < 30 or not openai_client:
-        return text
-    
-    if source_lang == "ru":
-        prompt = f"Перепиши этот текст для Telegram-канала об ИИ. Сделай короче, добавь эмодзи, НЕ обрывай мысль на середине. Сохрани смысл. Текст:\n\n{text}"
-    else:
-        prompt = f"Переведи этот текст с английского на русский и перепиши для Telegram-канала об ИИ. Сделай короче, добавь эмодзи. НЕ обрывай мысль на середине. Сохрани смысл. Текст:\n\n{text}"
-    
-    try:
-        response = openai_client.chat.completions.create(
-            model="google/gemini-2.0-flash-exp:free",
-            messages=[
-                {"role": "system", "content": "Ты — редактор новостного канала об ИИ. Твоя задача: переводить и переписывать новости так, чтобы они были короткими, интересными и понятными. Добавляй эмодзи. Никогда не обрывай мысль на середине. Всегда завершай предложение."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7,
-            max_tokens=800
-        )
-        result = response.choices[0].message.content
-        return result
-    except Exception as e:
-        print(f"❌ Ошибка AI: {e}")
-        return text
-
 # ---------- Парсинг RSS ----------
 def fetch_rss_news():
     all_news = []
@@ -98,7 +76,7 @@ def fetch_rss_news():
             for entry in feed.entries[:3]:
                 news_id = hashlib.md5(f"{entry.link}{entry.title}".encode()).hexdigest()
                 
-                # Полный текст (а не краткое описание)
+                # Полный текст
                 full_text = ""
                 if hasattr(entry, 'summary'):
                     soup = BeautifulSoup(entry.summary, 'html.parser')
@@ -111,13 +89,11 @@ def fetch_rss_news():
                 image_url = ""
                 if hasattr(entry, 'media_content') and entry.media_content:
                     image_url = entry.media_content[0].get('url', '')
-                elif hasattr(entry, 'link') and 'image' in entry.link:
-                    pass  # можно добавить парсинг картинки из HTML позже
                 
                 all_news.append({
                     "id": news_id,
                     "title": entry.title,
-                    "full_text": full_text[:1500],  # Ограничиваем длину
+                    "full_text": full_text[:1500],
                     "link": entry.link,
                     "image_url": image_url,
                     "published_at": datetime.datetime.now(),
@@ -167,15 +143,17 @@ def fetch_newsapi():
         print(f"❌ Ошибка NewsAPI: {e}")
         return []
 
-# ---------- Форматирование с AI-переводом ----------
+# ---------- Форматирование с переводом ----------
 async def format_news(news):
-    # Переводим и переписываем текст
-    if news["full_text"] and len(news["full_text"]) > 30:
-        processed_text = await translate_and_rewrite(news["full_text"], news["lang"])
+    # Переводим на русский если нужно
+    if news["lang"] == "en" and news["full_text"] and len(news["full_text"]) > 30:
+        processed_text = await simple_translate(news["full_text"])
+    elif news["full_text"]:
+        processed_text = news["full_text"]
     else:
         processed_text = news["title"]
     
-    # Берём первые 800 символов (но завершаем предложение)
+    # Обрезаем до 800 символов, завершая предложение
     if len(processed_text) > 800:
         last_dot = processed_text[:800].rfind('.')
         if last_dot > 0:
@@ -229,24 +207,23 @@ async def check_and_post(context):
 # ---------- Команды ----------
 async def start(update: Update, context):
     await update.message.reply_text(
-        "🤖 *Новостной агрегатор с AI-переводом*\n\n"
+        "🤖 *Новостной агрегатор с переводом*\n\n"
         "📰 Парсинг RSS-источников\n"
-        "🌐 Автоматический перевод с английского\n"
-        "✍️ Полный рерайт без обрыва мыслей\n"
-        "🔗 Ссылка на источник\n\n"
+        "🌐 Google Translate (бесплатно)\n"
+        "🔗 Ссылка на источник\n"
+        "🖼 Картинки при наличии\n\n"
         "/status — статистика\n"
         "/sources — источники"
     )
 
 async def status_command(update: Update, context):
-    ai_status = "✅ включён" if openai_client else "❌ отключён"
     await update.message.reply_text(
         f"📊 *Статистика*\n\n"
         f"📰 Новостей в памяти: {len(published_ids)}\n"
         f"⏱ Интервал: {CHECK_INTERVAL // 60} мин\n"
         f"📡 RSS-источников: {len(RSS_SOURCES)}\n"
-        f"✍️ AI-перевод+рерайт: {ai_status}\n"
-        f"🖼 Картинки: {'✅' if NEWS_API_KEY else '❌ (только текст)'}"
+        f"🌐 Перевод: Google Translate\n"
+        f"🖼 Картинки: ✅"
     )
 
 async def sources_command(update: Update, context):
@@ -261,11 +238,11 @@ async def sources_command(update: Update, context):
 # ---------- Запуск ----------
 async def main():
     print("=" * 50)
-    print("🚀 ЗАПУСК НОВОСТНОГО АГРЕГАТОРА (AI Translator v2)")
+    print("🚀 ЗАПУСК НОВОСТНОГО АГРЕГАТОРА (Google Translate)")
     print("=" * 50)
     print(f"✅ Канал: {CHANNEL_ID}")
     print(f"📡 RSS-источников: {len(RSS_SOURCES)}")
-    print(f"✍️ AI-рерайт: {'включён' if openai_client else 'отключён'}")
+    print(f"🌐 Перевод: Google Translate")
     
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
