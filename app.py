@@ -3,6 +3,7 @@ import datetime
 import hashlib
 import os
 import random
+import sqlite3
 from threading import Thread
 from flask import Flask
 import requests
@@ -22,14 +23,45 @@ CHANNEL_ID = os.environ.get("CHANNEL_ID", "@ai_diges")
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
 CHECK_INTERVAL = 300  # 5 минут
 
-# ---------- RSS-источники ----------
+# ---------- RSS-источники (русские + английские) ----------
 RSS_SOURCES = [
+    # Русскоязычные источники
     {"name": "Habr AI", "url": "https://habr.com/ru/rss/hub/ai/", "lang": "ru"},
+    {"name": "3DNews AI", "url": "https://3dnews.ru/news/search/искусственный+интеллект/rss/", "lang": "ru"},
+    {"name": "VC.ru AI", "url": "https://vc.ru/tag/ai/rss", "lang": "ru"},
+    {"name": "Tproger AI", "url": "https://tproger.ru/tag/ai/feed", "lang": "ru"},
+    {"name": "IXBT AI", "url": "https://www.ixbt.com/export/news_ai.xml", "lang": "ru"},
+    # Англоязычные источники (будут переводиться)
     {"name": "TechCrunch AI", "url": "https://techcrunch.com/tag/artificial-intelligence/feed/", "lang": "en"},
     {"name": "VentureBeat AI", "url": "https://venturebeat.com/category/ai/feed/", "lang": "en"},
     {"name": "MIT AI News", "url": "http://news.mit.edu/topic/artificial-intelligence2/feed", "lang": "en"},
-    {"name": "The Verge AI", "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml", "lang": "en"},
 ]
+
+# ---------- Инициализация SQLite (постоянное хранилище) ----------
+def init_db():
+    conn = sqlite3.connect('news.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS published
+                 (id TEXT PRIMARY KEY, title TEXT, created_at TIMESTAMP)''')
+    conn.commit()
+    conn.close()
+    print("✅ База данных инициализирована")
+
+def is_published(news_id):
+    conn = sqlite3.connect('news.db')
+    c = conn.cursor()
+    c.execute("SELECT 1 FROM published WHERE id = ?", (news_id,))
+    result = c.fetchone()
+    conn.close()
+    return result is not None
+
+def save_published(news_id, title):
+    conn = sqlite3.connect('news.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO published (id, title, created_at) VALUES (?, ?, ?)",
+              (news_id, title, datetime.datetime.now()))
+    conn.commit()
+    conn.close()
 
 # ---------- Google Translate через deep-translator ----------
 async def simple_translate(text, src='en', dest='ru'):
@@ -38,7 +70,6 @@ async def simple_translate(text, src='en', dest='ru'):
         return text
     try:
         print(f"🌐 Переводим {len(text)} символов...")
-        # Запускаем в отдельном потоке, чтобы не блокировать asyncio
         result = await asyncio.to_thread(
             GoogleTranslator(source=src, target=dest).translate,
             text[:3000]
@@ -60,15 +91,6 @@ def run_flask():
     port = int(os.environ.get("PORT", 5000))
     app_flask.run(host='0.0.0.0', port=port)
 
-# ---------- Хранилище ID новостей ----------
-published_ids = set()
-
-def is_published(news_id):
-    return news_id in published_ids
-
-def save_published(news_id):
-    published_ids.add(news_id)
-
 # ---------- Парсинг RSS ----------
 def fetch_rss_news():
     all_news = []
@@ -78,6 +100,10 @@ def fetch_rss_news():
             feed = feedparser.parse(source["url"])
             for entry in feed.entries[:3]:
                 news_id = hashlib.md5(f"{entry.link}{entry.title}".encode()).hexdigest()
+                
+                # Пропускаем уже опубликованные
+                if is_published(news_id):
+                    continue
                 
                 # Полный текст
                 full_text = ""
@@ -106,7 +132,7 @@ def fetch_rss_news():
         except Exception as e:
             print(f"❌ Ошибка {source['name']}: {e}")
     
-    print(f"📰 Собрано новостей RSS: {len(all_news)}")
+    print(f"📰 Собрано новых новостей RSS: {len(all_news)}")
     return all_news
 
 # ---------- NewsAPI (как резерв) ----------
@@ -116,7 +142,7 @@ def fetch_newsapi():
     try:
         url = "https://newsapi.org/v2/everything"
         params = {
-            "q": "artificial intelligence OR AI OR нейросети",
+            "q": "artificial intelligence OR AI",
             "language": "en",
             "sortBy": "publishedAt",
             "apiKey": NEWS_API_KEY,
@@ -131,6 +157,10 @@ def fetch_newsapi():
             if not article.get("title"):
                 continue
             news_id = hashlib.md5(f"{article['url']}{article['title']}".encode()).hexdigest()
+            
+            if is_published(news_id):
+                continue
+            
             news_list.append({
                 "id": news_id,
                 "title": article["title"],
@@ -148,7 +178,7 @@ def fetch_newsapi():
 
 # ---------- Форматирование с переводом ----------
 async def format_news(news):
-    # Переводим на русский если нужно
+    # Переводим на русский если источник английский
     if news["lang"] == "en" and news["full_text"] and len(news["full_text"]) > 30:
         processed_text = await simple_translate(news["full_text"])
     elif news["full_text"]:
@@ -174,6 +204,7 @@ async def format_news(news):
 async def check_and_post(context):
     print(f"[{datetime.datetime.now()}] 🔍 Проверка новых новостей...")
     
+    # Собираем новости из всех источников
     rss_news = fetch_rss_news()
     newsapi_news = fetch_newsapi()
     all_news = rss_news + newsapi_news
@@ -181,48 +212,54 @@ async def check_and_post(context):
     
     new_count = 0
     for news in all_news:
-        if not is_published(news["id"]):
-            message, image_url = await format_news(news)
-            try:
-                if image_url:
-                    await context.bot.send_photo(
-                        chat_id=CHANNEL_ID,
-                        photo=image_url,
-                        caption=message,
-                        parse_mode='Markdown'
-                    )
-                else:
-                    await context.bot.send_message(
-                        chat_id=CHANNEL_ID,
-                        text=message,
-                        parse_mode='Markdown',
-                        disable_web_page_preview=False
-                    )
-                save_published(news["id"])
-                new_count += 1
-                print(f"✅ Опубликовано: {news['title'][:50]}...")
-                await asyncio.sleep(3)
-            except Exception as e:
-                print(f"❌ Ошибка публикации: {e}")
+        message, image_url = await format_news(news)
+        try:
+            if image_url:
+                await context.bot.send_photo(
+                    chat_id=CHANNEL_ID,
+                    photo=image_url,
+                    caption=message,
+                    parse_mode='Markdown'
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=message,
+                    parse_mode='Markdown',
+                    disable_web_page_preview=False
+                )
+            save_published(news["id"], news["title"])
+            new_count += 1
+            print(f"✅ Опубликовано: {news['title'][:50]}...")
+            await asyncio.sleep(3)
+        except Exception as e:
+            print(f"❌ Ошибка публикации: {e}")
     
     print(f"📊 Итого новых: {new_count}")
 
 # ---------- Команды ----------
 async def start(update: Update, context):
     await update.message.reply_text(
-        "🤖 *Новостной агрегатор с переводом*\n\n"
-        "📰 Парсинг RSS-источников\n"
-        "🌐 Google Translate (стабильный)\n"
+        "🤖 *Новостной агрегатор ИИ*\n\n"
+        "📰 Русские и английские RSS-источники\n"
+        "🌐 Английские новости переводятся на русский\n"
         "🔗 Ссылка на источник\n"
-        "🖼 Картинки при наличии\n\n"
+        "🖼 Картинки при наличии\n"
+        "💾 Постоянная база данных (без дублей)\n\n"
         "/status — статистика\n"
         "/sources — источники"
     )
 
 async def status_command(update: Update, context):
+    conn = sqlite3.connect('news.db')
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM published")
+    count = c.fetchone()[0]
+    conn.close()
+    
     await update.message.reply_text(
         f"📊 *Статистика*\n\n"
-        f"📰 Новостей в памяти: {len(published_ids)}\n"
+        f"📰 Всего опубликовано: {count}\n"
         f"⏱ Интервал: {CHECK_INTERVAL // 60} мин\n"
         f"📡 RSS-источников: {len(RSS_SOURCES)}\n"
         f"🌐 Перевод: Google Translate\n"
@@ -230,10 +267,15 @@ async def status_command(update: Update, context):
     )
 
 async def sources_command(update: Update, context):
-    text = "📰 *RSS-источники*\n"
+    text = "📰 *RSS-источники*\n\n"
+    text += "🇷🇺 *Русские:*\n"
     for s in RSS_SOURCES:
-        lang_emoji = "🇷🇺" if s.get("lang") == "ru" else "🇬🇧"
-        text += f"• {lang_emoji} {s['name']}\n"
+        if s.get("lang") == "ru":
+            text += f"• {s['name']}\n"
+    text += "\n🇬🇧 *Английские (переводятся):*\n"
+    for s in RSS_SOURCES:
+        if s.get("lang") == "en":
+            text += f"• {s['name']}\n"
     if NEWS_API_KEY:
         text += "\n📡 NewsAPI (резерв)"
     await update.message.reply_text(text)
@@ -241,11 +283,14 @@ async def sources_command(update: Update, context):
 # ---------- Запуск ----------
 async def main():
     print("=" * 50)
-    print("🚀 ЗАПУСК НОВОСТНОГО АГРЕГАТОРА (deep-translator)")
+    print("🚀 ЗАПУСК НОВОСТНОГО АГРЕГАТОРА")
     print("=" * 50)
     print(f"✅ Канал: {CHANNEL_ID}")
     print(f"📡 RSS-источников: {len(RSS_SOURCES)}")
     print(f"🌐 Перевод: Google Translate (deep-translator)")
+    
+    # Инициализируем базу данных
+    init_db()
     
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
