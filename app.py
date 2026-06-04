@@ -12,7 +12,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
-from googletrans import Translator
+from deep_translator import GoogleTranslator
 
 load_dotenv()
 
@@ -31,17 +31,20 @@ RSS_SOURCES = [
     {"name": "The Verge AI", "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml", "lang": "en"},
 ]
 
-# ---------- Google Translate ----------
-translator = Translator()
-
+# ---------- Google Translate через deep-translator ----------
 async def simple_translate(text, src='en', dest='ru'):
-    """Перевод через Google Translate (бесплатно)"""
+    """Перевод через Google Translate (стабильная версия)"""
     if not text or len(text) < 30:
         return text
     try:
         print(f"🌐 Переводим {len(text)} символов...")
-        result = await asyncio.to_thread(translator.translate, text[:3000], src=src, dest=dest)
-        return result.text
+        # Запускаем в отдельном потоке, чтобы не блокировать asyncio
+        result = await asyncio.to_thread(
+            GoogleTranslator(source=src, target=dest).translate,
+            text[:3000]
+        )
+        print(f"✅ Перевод готов: {result[:50]}...")
+        return result
     except Exception as e:
         print(f"❌ Ошибка перевода: {e}")
         return text
@@ -209,7 +212,7 @@ async def start(update: Update, context):
     await update.message.reply_text(
         "🤖 *Новостной агрегатор с переводом*\n\n"
         "📰 Парсинг RSS-источников\n"
-        "🌐 Google Translate (бесплатно)\n"
+        "🌐 Google Translate (стабильный)\n"
         "🔗 Ссылка на источник\n"
         "🖼 Картинки при наличии\n\n"
         "/status — статистика\n"
@@ -238,11 +241,11 @@ async def sources_command(update: Update, context):
 # ---------- Запуск ----------
 async def main():
     print("=" * 50)
-    print("🚀 ЗАПУСК НОВОСТНОГО АГРЕГАТОРА (Google Translate)")
+    print("🚀 ЗАПУСК НОВОСТНОГО АГРЕГАТОРА (deep-translator)")
     print("=" * 50)
     print(f"✅ Канал: {CHANNEL_ID}")
     print(f"📡 RSS-источников: {len(RSS_SOURCES)}")
-    print(f"🌐 Перевод: Google Translate")
+    print(f"🌐 Перевод: Google Translate (deep-translator)")
     
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
