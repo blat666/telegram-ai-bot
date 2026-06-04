@@ -61,29 +61,29 @@ def is_published(news_id):
 def save_published(news_id):
     published_ids.add(news_id)
 
-# ---------- AI: перевод + рерайт ----------
+# ---------- AI: перевод + рерайт (полный текст, без обрыва) ----------
 async def translate_and_rewrite(text, source_lang="en"):
-    """Переводит с английского на русский и делает рерайт"""
+    """Переводит с английского на русский, делает рерайт, но сохраняет смысл"""
     if not text or len(text) < 30 or not openai_client:
         return text
     
     if source_lang == "ru":
-        prompt = f"Перепиши этот текст короче и интереснее для Telegram-канала об ИИ. Сохрани смысл, добавь эмодзи где уместно. Не добавляй ссылки. Текст:\n\n{text}"
+        prompt = f"Перепиши этот текст для Telegram-канала об ИИ. Сделай короче, добавь эмодзи, НЕ обрывай мысль на середине. Сохрани смысл. Текст:\n\n{text}"
     else:
-        prompt = f"Переведи этот текст с английского на русский и перепиши его в стиле Telegram-канала об ИИ. Сделай короче, добавь эмодзи. Сохрани смысл. Текст:\n\n{text}"
+        prompt = f"Переведи этот текст с английского на русский и перепиши для Telegram-канала об ИИ. Сделай короче, добавь эмодзи. НЕ обрывай мысль на середине. Сохрани смысл. Текст:\n\n{text}"
     
     try:
         response = openai_client.chat.completions.create(
             model="google/gemini-2.0-flash-exp:free",
             messages=[
-                {"role": "system", "content": "Ты — редактор новостного канала об искусственном интеллекте. Твоя задача: переводить и переписывать новости так, чтобы они были короткими, интересными и понятными. Добавляй эмодзи. Не меняй смысл."},
+                {"role": "system", "content": "Ты — редактор новостного канала об ИИ. Твоя задача: переводить и переписывать новости так, чтобы они были короткими, интересными и понятными. Добавляй эмодзи. Никогда не обрывай мысль на середине. Всегда завершай предложение."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
-            max_tokens=400
+            max_tokens=800
         )
         result = response.choices[0].message.content
-        return result[:500]
+        return result
     except Exception as e:
         print(f"❌ Ошибка AI: {e}")
         return text
@@ -98,19 +98,28 @@ def fetch_rss_news():
             for entry in feed.entries[:3]:
                 news_id = hashlib.md5(f"{entry.link}{entry.title}".encode()).hexdigest()
                 
-                summary = ""
+                # Полный текст (а не краткое описание)
+                full_text = ""
                 if hasattr(entry, 'summary'):
                     soup = BeautifulSoup(entry.summary, 'html.parser')
-                    summary = soup.get_text()[:500]
+                    full_text = soup.get_text()
                 elif hasattr(entry, 'description'):
                     soup = BeautifulSoup(entry.description, 'html.parser')
-                    summary = soup.get_text()[:500]
+                    full_text = soup.get_text()
+                
+                # Картинка (если есть)
+                image_url = ""
+                if hasattr(entry, 'media_content') and entry.media_content:
+                    image_url = entry.media_content[0].get('url', '')
+                elif hasattr(entry, 'link') and 'image' in entry.link:
+                    pass  # можно добавить парсинг картинки из HTML позже
                 
                 all_news.append({
                     "id": news_id,
-                    "original_title": entry.title,
-                    "original_summary": summary,
+                    "title": entry.title,
+                    "full_text": full_text[:1500],  # Ограничиваем длину
                     "link": entry.link,
+                    "image_url": image_url,
                     "published_at": datetime.datetime.now(),
                     "source": source["name"],
                     "lang": source.get("lang", "en")
@@ -132,7 +141,7 @@ def fetch_newsapi():
             "language": "en",
             "sortBy": "publishedAt",
             "apiKey": NEWS_API_KEY,
-            "pageSize": 3
+            "pageSize": 2
         }
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
@@ -145,9 +154,10 @@ def fetch_newsapi():
             news_id = hashlib.md5(f"{article['url']}{article['title']}".encode()).hexdigest()
             news_list.append({
                 "id": news_id,
-                "original_title": article["title"],
-                "original_summary": article.get("description", ""),
+                "title": article["title"],
+                "full_text": article.get("description", ""),
                 "link": article["url"],
+                "image_url": article.get("urlToImage", ""),
                 "published_at": datetime.datetime.now(),
                 "source": article.get("source", {}).get("name", "NewsAPI"),
                 "lang": "en"
@@ -157,23 +167,28 @@ def fetch_newsapi():
         print(f"❌ Ошибка NewsAPI: {e}")
         return []
 
-# ---------- Форматирование с AI (перевод для всех) ----------
+# ---------- Форматирование с AI-переводом ----------
 async def format_news(news):
-    # Переводим и переписываем заголовок
-    processed_title = await translate_and_rewrite(news["original_title"], news["lang"])
+    # Переводим и переписываем текст
+    if news["full_text"] and len(news["full_text"]) > 30:
+        processed_text = await translate_and_rewrite(news["full_text"], news["lang"])
+    else:
+        processed_text = news["title"]
     
-    # Переводим и переписываем описание
-    processed_summary = ""
-    if news["original_summary"] and len(news["original_summary"]) > 30:
-        processed_summary = await translate_and_rewrite(news["original_summary"], news["lang"])
+    # Берём первые 800 символов (но завершаем предложение)
+    if len(processed_text) > 800:
+        last_dot = processed_text[:800].rfind('.')
+        if last_dot > 0:
+            processed_text = processed_text[:last_dot + 1]
     
-    message = f"🤖 *{news['source']}*\n"
-    message += f"📌 {processed_title}\n"
-    if processed_summary:
-        message += f"\n📝 {processed_summary}\n"
+    # Формируем сообщение
+    message = f"🤖 *{news['source']}*\n\n"
+    message += f"{processed_text}\n\n"
+    message += f"🔗 [Читать полностью]({news['link']})\n"
     message += f"\n🕐 {news['published_at'].strftime('%H:%M')}\n"
     message += "━━━━━━━━━━━━━━━━━━━"
-    return message
+    
+    return message, news.get("image_url", "")
 
 async def check_and_post(context):
     print(f"[{datetime.datetime.now()}] 🔍 Проверка новых новостей...")
@@ -186,17 +201,25 @@ async def check_and_post(context):
     new_count = 0
     for news in all_news:
         if not is_published(news["id"]):
-            message = await format_news(news)
+            message, image_url = await format_news(news)
             try:
-                await context.bot.send_message(
-                    chat_id=CHANNEL_ID,
-                    text=message,
-                    parse_mode='Markdown',
-                    disable_web_page_preview=False
-                )
+                if image_url:
+                    await context.bot.send_photo(
+                        chat_id=CHANNEL_ID,
+                        photo=image_url,
+                        caption=message,
+                        parse_mode='Markdown'
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id=CHANNEL_ID,
+                        text=message,
+                        parse_mode='Markdown',
+                        disable_web_page_preview=False
+                    )
                 save_published(news["id"])
                 new_count += 1
-                print(f"✅ Опубликовано: {news['original_title'][:50]}...")
+                print(f"✅ Опубликовано: {news['title'][:50]}...")
                 await asyncio.sleep(3)
             except Exception as e:
                 print(f"❌ Ошибка публикации: {e}")
@@ -207,9 +230,10 @@ async def check_and_post(context):
 async def start(update: Update, context):
     await update.message.reply_text(
         "🤖 *Новостной агрегатор с AI-переводом*\n\n"
-        "📰 Парсинг любых RSS-источников\n"
+        "📰 Парсинг RSS-источников\n"
         "🌐 Автоматический перевод с английского\n"
-        "✍️ AI-рерайт для уникальности\n\n"
+        "✍️ Полный рерайт без обрыва мыслей\n"
+        "🔗 Ссылка на источник\n\n"
         "/status — статистика\n"
         "/sources — источники"
     )
@@ -221,7 +245,8 @@ async def status_command(update: Update, context):
         f"📰 Новостей в памяти: {len(published_ids)}\n"
         f"⏱ Интервал: {CHECK_INTERVAL // 60} мин\n"
         f"📡 RSS-источников: {len(RSS_SOURCES)}\n"
-        f"✍️ AI-перевод+рерайт: {ai_status}"
+        f"✍️ AI-перевод+рерайт: {ai_status}\n"
+        f"🖼 Картинки: {'✅' if NEWS_API_KEY else '❌ (только текст)'}"
     )
 
 async def sources_command(update: Update, context):
@@ -229,12 +254,14 @@ async def sources_command(update: Update, context):
     for s in RSS_SOURCES:
         lang_emoji = "🇷🇺" if s.get("lang") == "ru" else "🇬🇧"
         text += f"• {lang_emoji} {s['name']}\n"
+    if NEWS_API_KEY:
+        text += "\n📡 NewsAPI (резерв)"
     await update.message.reply_text(text)
 
 # ---------- Запуск ----------
 async def main():
     print("=" * 50)
-    print("🚀 ЗАПУСК НОВОСТНОГО АГРЕГАТОРА (AI Translator)")
+    print("🚀 ЗАПУСК НОВОСТНОГО АГРЕГАТОРА (AI Translator v2)")
     print("=" * 50)
     print(f"✅ Канал: {CHANNEL_ID}")
     print(f"📡 RSS-источников: {len(RSS_SOURCES)}")
